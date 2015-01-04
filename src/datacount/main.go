@@ -76,7 +76,7 @@ func main() {
 
 	zmqerr = receiver.Connect(IP)
 	if zmqerr != nil {
-		logger.Error(".....................【  连接服务器失败】....................")
+		logger.Error(".....................【  连接服务器失败      】....................")
 	} else {
 		logger.Info("......................【服务器连接成功,server address=】.........", IP)
 	}
