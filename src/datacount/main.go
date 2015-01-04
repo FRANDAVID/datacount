@@ -105,8 +105,8 @@ func main() {
 	for {
 		var iaqResult int = 0
 
-		s := `{"datetime":"2014_12_27_12_03_56","sn":"AISN145010011004","pm25":"10","voc":"0.01","smoke":"820","noise":"73","temp":"22","humidity":"28"}`
-		//s, _ := receiver.Recv(0)
+		//s := `{"datetime":"2014_12_27_12_03_56","sn":"AISN145010011004","pm25":"10","voc":"0.01","smoke":"820","noise":"73","temp":"22","humidity":"28"}`
+		s, _ := receiver.Recv(0)
 
 		dataNode, _ := j4g.LoadByString(s)
 		pm25 := dataNode.GetNodeByName("pm25").ValueString
@@ -135,7 +135,7 @@ func main() {
 		// 计算净化器是否开启的逻辑，并返回完整userProductJson 包含 levelResult
 		upNode := openCleanerCompute(sn, levelConfigNode, pm25Int, int(hchoInt*1000), smokeInt, sn+"_"+datetime)
 		openCleaner(sn, upNode)
-		break
+		//break
 	}
 
 }
