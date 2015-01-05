@@ -201,7 +201,12 @@ func setIAQToDB(sn string, iaq int, key string) {
 		logger.Error("保存iaq db 异常")
 	}
 	upNode, _ := j4g.LoadByString(userProuctJson)
-	mobile := upNode.GetNodeByName("mobile").ValueString
+	mobileObj := upNode.GetNodeByName("mobile")
+	mobile := ""
+	if mobileObj != nil {
+		mobile = upNode.GetNodeByName("mobile").ValueString
+
+	}
 
 	if mobile != "" {
 		logger.Debug("设备【", sn, "】的【用户手机号】"+mobile)
@@ -268,8 +273,8 @@ func setIAQToDB(sn string, iaq int, key string) {
 				logger.Debug("...................【 用户 ", mobile, "空气质量变差重新开始累计】.......................")
 			}
 		}
+	} else {
 		//把iaq更新到 couchdb中
-
 		dataByte, _ := d.GetRaw(key)
 		dataJson := string(dataByte)
 		dataNode, _ := j4g.LoadByString(dataJson)
@@ -277,7 +282,7 @@ func setIAQToDB(sn string, iaq int, key string) {
 		iaqNode.Name = "iaq"
 		iaqNode.SetValue(int(iaq))
 		dataNode.AddNode(iaqNode)
-		logger.Debug(".......【带有最新IAQ的检测数据", key, "】-->", dataNode.ToCouchDBString())
+		logger.Info("IAQ检测数据【带有最新IAQ的检测数据", key, "】-->", dataNode.ToCouchDBString())
 
 		d.SetRaw(key, 0, []byte(dataNode.ToCouchDBString()))
 	}
@@ -449,11 +454,11 @@ func openCleanerCompute(sn string, node *j4g.JsonNode, pm25 int, voc int, smoke 
 			}
 		}
 		levelTemp.Name = "levelResult"
-		logger.Info(levelTemp.ToCouchDBString())
+		//logger.Info(levelTemp.ToCouchDBString())
 		upNode.AddNode(levelTemp)
-		logger.Info(upNode.ToCouchDBString())
+		//logger.Info(upNode.ToCouchDBString())
 
-		logger.Info(upNode.ToCouchDBString())
+		//logger.Info(upNode.ToCouchDBString())
 		b.SetRaw(sn, 0, []byte(upNode.ToCouchDBString()))
 		return upNode
 	} else {
@@ -529,10 +534,12 @@ func openCleaner(sn string, upNode *j4g.JsonNode) {
 	b, err := couchbase.GetBucket(userProductUrl,
 		"default", "aicc-UserProductDB")
 
-	cleanArray := upNode.GetNodeByName("cleanSnArray").ArraysStruct
-	if len(cleanArray) == 0 {
+	if upNode.GetNodeByName("cleanSnArray") == nil {
 		logger.Info("设备【", sn, "】没有绑定任何净化器，程序只记录检测数据")
+		return
 	}
+	cleanArray := upNode.GetNodeByName("cleanSnArray").ArraysStruct
+
 	for i := 0; i < len(cleanArray); i++ {
 		cleanSn := cleanArray[i].ToJsonNode().GetNodeByName("sn").ValueString
 		if err == nil {
