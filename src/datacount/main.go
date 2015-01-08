@@ -49,7 +49,7 @@ var couchDataUrl = "http://aicc-CouchbaseDB:111111@10.10.10.80:8091/"
 func main() {
 
 	logger.SetConsole(true)
-	logger.SetRollingDaily(LOGPATH, "test.log")
+	logger.SetRollingDaily(LOGPATH, "datacount.log")
 	logger.SetLevel(logger.INFO)
 	logger.Info("......................【IAQ计算任务开始】......................")
 	confgJsonString, err := readFile(IAQCONFIG)
@@ -273,6 +273,17 @@ func setIAQToDB(sn string, iaq int, key string) {
 				logger.Debug("...................【 用户 ", mobile, "空气质量变差重新开始累计】.......................")
 			}
 		}
+		//把iaq更新到 couchdb中
+		dataByte, _ := d.GetRaw(key)
+		dataJson := string(dataByte)
+		dataNode, _ := j4g.LoadByString(dataJson)
+		iaqNode := new(j4g.JsonNode)
+		iaqNode.Name = "iaq"
+		iaqNode.SetValue(int(iaq))
+		dataNode.AddNode(iaqNode)
+		logger.Info("IAQ检测数据【带有最新IAQ的检测数据", key, "】-->", dataNode.ToCouchDBString())
+
+		d.SetRaw(key, 0, []byte(dataNode.ToCouchDBString()))
 	} else {
 		//把iaq更新到 couchdb中
 		dataByte, _ := d.GetRaw(key)
