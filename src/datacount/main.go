@@ -45,11 +45,12 @@ const (
 
 var userProductUrl = "http://aicc-UserProductDB:111111@10.10.10.80:8091/"
 var couchDataUrl = "http://aicc-CouchbaseDB:111111@10.10.10.80:8091/"
+var memDataUrl = "http://aicc-MemcachedDB:111111@10.10.10.80:8091/"
 
 func main() {
 
 	logger.SetConsole(true)
-	logger.SetRollingDaily(LOGPATH, "datacount.log")
+	logger.SetRollingDaily(LOGPATH, "test.log")
 	logger.SetLevel(logger.INFO)
 	logger.Info("......................【IAQ计算任务开始】......................")
 	confgJsonString, err := readFile(IAQCONFIG)
@@ -76,7 +77,7 @@ func main() {
 
 	zmqerr = receiver.Connect(IP)
 	if zmqerr != nil {
-		logger.Error(".....................【  连接服22务器失败      】....................")
+		logger.Error(".....................【  连接服务器失败      】....................")
 	} else {
 		logger.Info("......................【服务器连接成功,server address=】.........", IP)
 	}
@@ -190,6 +191,8 @@ func setIAQToDB(sn string, iaq int, key string) {
 		"default", "aicc-UserProductDB")
 	d, err := couchbase.GetBucket(couchDataUrl,
 		"default", "aicc-CouchbaseDB")
+	m, err := couchbase.GetBucket(memDataUrl,
+		"default", "aicc-MemcachedDB")
 	var userProuctJson string = ""
 	var userJson string = ""
 	if err == nil {
@@ -274,6 +277,7 @@ func setIAQToDB(sn string, iaq int, key string) {
 			}
 		}
 		//把iaq更新到 couchdb中
+
 		dataByte, _ := d.GetRaw(key)
 		dataJson := string(dataByte)
 		dataNode, _ := j4g.LoadByString(dataJson)
@@ -281,9 +285,10 @@ func setIAQToDB(sn string, iaq int, key string) {
 		iaqNode.Name = "iaq"
 		iaqNode.SetValue(int(iaq))
 		dataNode.AddNode(iaqNode)
-		logger.Info("IAQ检测数据【带有最新IAQ的检测数据", key, "】-->", dataNode.ToCouchDBString())
+		logger.Debug(".......【带有最新IAQ的检测数据", key, "】-->", dataNode.ToCouchDBString())
 
 		d.SetRaw(key, 0, []byte(dataNode.ToCouchDBString()))
+		m.SetRaw(sn, 300, []byte(dataNode.ToCouchDBString())) //保存检测数据到内存中
 	} else {
 		//把iaq更新到 couchdb中
 		dataByte, _ := d.GetRaw(key)
@@ -296,6 +301,8 @@ func setIAQToDB(sn string, iaq int, key string) {
 		logger.Info("IAQ检测数据【带有最新IAQ的检测数据", key, "】-->", dataNode.ToCouchDBString())
 
 		d.SetRaw(key, 0, []byte(dataNode.ToCouchDBString()))
+		m.SetRaw(sn, 300, []byte(dataNode.ToCouchDBString())) //保存检测数据到内存中
+
 	}
 	defer func() {
 		if er := recover(); er != nil {
@@ -465,11 +472,11 @@ func openCleanerCompute(sn string, node *j4g.JsonNode, pm25 int, voc int, smoke 
 			}
 		}
 		levelTemp.Name = "levelResult"
-		//logger.Info(levelTemp.ToCouchDBString())
+		logger.Info(levelTemp.ToCouchDBString())
 		upNode.AddNode(levelTemp)
-		//logger.Info(upNode.ToCouchDBString())
+		logger.Info(upNode.ToCouchDBString())
 
-		//logger.Info(upNode.ToCouchDBString())
+		logger.Info(upNode.ToCouchDBString())
 		b.SetRaw(sn, 0, []byte(upNode.ToCouchDBString()))
 		return upNode
 	} else {
@@ -550,7 +557,6 @@ func openCleaner(sn string, upNode *j4g.JsonNode) {
 		return
 	}
 	cleanArray := upNode.GetNodeByName("cleanSnArray").ArraysStruct
-
 	for i := 0; i < len(cleanArray); i++ {
 		cleanSn := cleanArray[i].ToJsonNode().GetNodeByName("sn").ValueString
 		if err == nil {
