@@ -33,29 +33,42 @@ import (
 	zmq "github.com/pebbe/zmq4"
 	"io/ioutil"
 	j4g "json4g"
+	"os"
 	"strconv"
 )
 
 const (
-	LOGPATH     = "/Users/weijin/log"
-	IP          = "tcp://localhost:5557"
-	IAQCONFIG   = "./json/iaq.json"
-	LEVELCONFIG = "./json/levelconfig.json"
+	LOGPATH            = "/Users/weijin/log"
+	HOST        string = "localhost"
+	PORT        string = "5557"
+	IP                 = "tcp://" + HOST + ":" + PORT
+	IAQCONFIG          = "./json/iaq.json"
+	LEVELCONFIG        = "./json/levelconfig.json"
 )
 
 var userProductUrl = "http://aicc-UserProductDB:111111@10.10.10.80:8091/"
 var couchDataUrl = "http://aicc-CouchbaseDB:111111@10.10.10.80:8091/"
-var memDataUrl = "http://aicc-MemcachedDB:111111@10.10.10.80:8091/"
+var serverIp string = ""
 
 func main() {
-
+	//日志设置
 	logger.SetConsole(true)
-	logger.SetRollingDaily(LOGPATH, "test.log")
+	logger.SetRollingDaily(LOGPATH, "datacount.log")
 	logger.SetLevel(logger.INFO)
-	logger.Info("......................【IAQ计算任务开始】......................")
 	confgJsonString, err := readFile(IAQCONFIG)
 	levelConfgJsonString, levleErr := readFile(LEVELCONFIG)
-
+	//端口设置
+	userIp := ""
+	logger.Info("------------------------------", os.Args, len(os.Args))
+	if os.Args != nil && len(os.Args) == 3 {
+		userIp = "tcp://" + os.Args[1] + ":" + os.Args[2]
+		logger.Info("【用户自定义socket server】", userIp)
+	}
+	if userIp != "" {
+		serverIp = userIp
+	} else {
+		serverIp = IP
+	}
 	if err == nil {
 		// 成功读取配置json 构造配置对象
 		logger.Info("......................【IAQ配置文件读取完成！】......................")
@@ -75,11 +88,11 @@ func main() {
 		logger.Error(".....................【  创建receiver失败   】....................")
 	}
 
-	zmqerr = receiver.Connect(IP)
+	zmqerr = receiver.Connect(serverIp)
 	if zmqerr != nil {
 		logger.Error(".....................【  连接服务器失败      】....................")
 	} else {
-		logger.Info("......................【服务器连接成功,server address=】.........", IP)
+		logger.Info("......................【Server:", serverIp, "】.........")
 	}
 
 	node, err := j4g.LoadByString(confgJsonString)
@@ -124,7 +137,7 @@ func main() {
 		hchocmin, hchocmax, hchoimin, hchoimax := iaqConfig(int(hchoInt*1000), hchoArray)
 		iAQIpm25 := computeIAQ(pm25Int, pm25cmin, pm25cmax, pm25imin, pm25imax)
 		iAQIhcho := computeIAQ(int(hchoInt*1000), hchocmin, hchocmax, hchoimin, hchoimax)
-		logger.Info("..................【pm25IAQ 结算结果", iAQIpm25, "】,【HCOIAQ 结算结果", iAQIhcho, "】")
+		logger.Info("【pm25IAQ 结算结果", iAQIpm25, "】,【HCOIAQ 结算结果", iAQIhcho, "】")
 		if iAQIpm25 > iAQIhcho {
 			iaqResult = iAQIpm25
 		} else {
@@ -135,7 +148,7 @@ func main() {
 		setIAQToDB(sn, iaqResult, sn+"_"+datetime) //计算iaq 保存到检测数据桶
 		// 计算净化器是否开启的逻辑，并返回完整userProductJson 包含 levelResult
 		upNode := openCleanerCompute(sn, levelConfigNode, pm25Int, int(hchoInt*1000), smokeInt, sn+"_"+datetime)
-		openCleaner(sn, upNode)
+		openCleaner(sn, upNode, iaqResult)
 		//break
 	}
 
@@ -191,8 +204,7 @@ func setIAQToDB(sn string, iaq int, key string) {
 		"default", "aicc-UserProductDB")
 	d, err := couchbase.GetBucket(couchDataUrl,
 		"default", "aicc-CouchbaseDB")
-	m, err := couchbase.GetBucket(memDataUrl,
-		"default", "aicc-MemcachedDB")
+
 	var userProuctJson string = ""
 	var userJson string = ""
 	if err == nil {
@@ -258,7 +270,7 @@ func setIAQToDB(sn string, iaq int, key string) {
 					userNode.AddNode(iaqCountNode)
 				}
 				b.SetRaw(mobile, 0, []byte(userNode.ToCouchDBString()))
-				logger.Debug("...................更新用户室内最好IAQ【", mobile, "】oldiaq=", int(oldIaq.ValueNumber), " newiaq=", iaq, "oldIaqCount=", int(oldIaqCount.ValueNumber), "new iaqCount=", int(oldIaqCount.ValueNumber)+1)
+				logger.Info("更新用户室内最好IAQ【", mobile, "】oldiaq=", int(oldIaq.ValueNumber), " newiaq=", iaq, "oldIaqCount=", int(oldIaqCount.ValueNumber), "new iaqCount=", int(oldIaqCount.ValueNumber)+1)
 
 			} else {
 				//空气质量变差，从新计数
@@ -273,37 +285,22 @@ func setIAQToDB(sn string, iaq int, key string) {
 					userNode.AddNode(iaqCountNode)
 				}
 				b.SetRaw(mobile, 0, []byte(userNode.ToCouchDBString()))
-				logger.Debug("...................【 用户 ", mobile, "空气质量变差重新开始累计】.......................")
+				logger.Debug("【 用户 ", mobile, "空气质量变差重新开始累计】.......................")
 			}
 		}
-		//把iaq更新到 couchdb中
-
-		dataByte, _ := d.GetRaw(key)
-		dataJson := string(dataByte)
-		dataNode, _ := j4g.LoadByString(dataJson)
-		iaqNode := new(j4g.JsonNode)
-		iaqNode.Name = "iaq"
-		iaqNode.SetValue(int(iaq))
-		dataNode.AddNode(iaqNode)
-		logger.Debug(".......【带有最新IAQ的检测数据", key, "】-->", dataNode.ToCouchDBString())
-
-		d.SetRaw(key, 0, []byte(dataNode.ToCouchDBString()))
-		m.SetRaw(sn, 300, []byte(dataNode.ToCouchDBString())) //保存检测数据到内存中
-	} else {
-		//把iaq更新到 couchdb中
-		dataByte, _ := d.GetRaw(key)
-		dataJson := string(dataByte)
-		dataNode, _ := j4g.LoadByString(dataJson)
-		iaqNode := new(j4g.JsonNode)
-		iaqNode.Name = "iaq"
-		iaqNode.SetValue(int(iaq))
-		dataNode.AddNode(iaqNode)
-		logger.Info("IAQ检测数据【带有最新IAQ的检测数据", key, "】-->", dataNode.ToCouchDBString())
-
-		d.SetRaw(key, 0, []byte(dataNode.ToCouchDBString()))
-		m.SetRaw(sn, 300, []byte(dataNode.ToCouchDBString())) //保存检测数据到内存中
 
 	}
+	//把iaq更新到 couchdb中
+	dataByte, _ := d.GetRaw(key)
+	dataJson := string(dataByte)
+	dataNode, _ := j4g.LoadByString(dataJson)
+	iaqNode := new(j4g.JsonNode)
+	iaqNode.Name = "iaq"
+	iaqNode.SetValue(int(iaq))
+	dataNode.AddNode(iaqNode)
+	logger.Info("【更新数据桶中iaq", key, "】-->", dataNode.GetNodeByPath("iaq").ValueNumber)
+
+	d.SetRaw(key, 0, []byte(dataNode.ToCouchDBString()))
 	defer func() {
 		if er := recover(); er != nil {
 			logger.Error(".............发生严重错误............................")
@@ -415,9 +412,7 @@ func openCleanerCompute(sn string, node *j4g.JsonNode, pm25 int, voc int, smoke 
 		}
 	}
 	levelTemp.AddNode(smokeLevelTemp)
-	logger.Info("检测数据【", dataKey, "】pm25 传感器污染级别为", levelTemp.GetNodeByPath("pm25").GetNodeByName("level").ValueNumber)
-	logger.Info("检测数据【", dataKey, "】voc 传感器污染级别为", levelTemp.GetNodeByPath("voc").GetNodeByName("level").ValueNumber)
-	logger.Info("检测数据【", dataKey, "】smoke 传感器污染级别为", levelTemp.GetNodeByPath("smoke").GetNodeByName("level").ValueNumber)
+	logger.Info("污染级别【", dataKey, "】pm25=", levelTemp.GetNodeByPath("pm25").GetNodeByName("level").ValueNumber, "voc=", levelTemp.GetNodeByPath("voc").GetNodeByName("level").ValueNumber, "smoke=", levelTemp.GetNodeByPath("smoke").GetNodeByName("level").ValueNumber)
 
 	logger.Debug("传感器levelTemp", levelTemp.GetNodeByPath("pm25").GetNodeByName("name").ValueString)
 
@@ -472,11 +467,16 @@ func openCleanerCompute(sn string, node *j4g.JsonNode, pm25 int, voc int, smoke 
 			}
 		}
 		levelTemp.Name = "levelResult"
-		logger.Info(levelTemp.ToCouchDBString())
+		//logger.Info(levelTemp.ToCouchDBString())
 		upNode.AddNode(levelTemp)
-		logger.Info(upNode.ToCouchDBString())
-
-		logger.Info(upNode.ToCouchDBString())
+		//logger.Info(upNode.ToCouchDBString())
+		temp := upNode.GetNodeByName("follwers")
+		if temp != nil {
+			follwers := temp.ArraysStruct
+			if len(follwers) == 0 {
+				upNode.DelNode("follwers")
+			}
+		}
 		b.SetRaw(sn, 0, []byte(upNode.ToCouchDBString()))
 		return upNode
 	} else {
@@ -513,6 +513,13 @@ func openCleanerCompute(sn string, node *j4g.JsonNode, pm25 int, voc int, smoke 
 			}
 		}
 		upNode.AddNode(level)
+		temp := upNode.GetNodeByName("follwers")
+		if temp != nil {
+			follwers := temp.ArraysStruct
+			if len(follwers) == 0 {
+				upNode.DelNode("follwers")
+			}
+		}
 		b.SetRaw(sn, 0, []byte(upNode.ToCouchDBString()))
 
 		return upNode
@@ -523,7 +530,7 @@ func openCleanerCompute(sn string, node *j4g.JsonNode, pm25 int, voc int, smoke 
 }
 
 //根据level 结果 判断是否开启净化器
-func openCleaner(sn string, upNode *j4g.JsonNode) {
+func openCleaner(sn string, upNode *j4g.JsonNode, iaq int) {
 	var status string = "0"
 	var levelInt int = 1
 	var count float64 = 0
@@ -561,15 +568,18 @@ func openCleaner(sn string, upNode *j4g.JsonNode) {
 		cleanSn := cleanArray[i].ToJsonNode().GetNodeByName("sn").ValueString
 		if err == nil {
 			cleanbyte, _ := b.GetRaw(cleanSn)
-
 			cleanJsonStr := string(cleanbyte)
 			cleanNode, _ := j4g.LoadByString(cleanJsonStr)
+
+			cleanNode.AddNode(j4g.NowJsonNode("iaq", float64(iaq)))
+
 			if "A" == cleanNode.GetNodeByPath("runType").ValueString {
 				cleanNode.GetNodeByPath("status").SetValue(status)
 				cleanNode.GetNodeByPath("windpower").SetValue(levelInt)
 				b.SetRaw(cleanSn, 0, []byte(cleanNode.ToCouchDBString()))
 				logger.Info("【", cleanSn, "】达到自动运行标准开始自动运行", "本次操作 status=", status, "windpower=", levelInt)
 			} else {
+				b.SetRaw(cleanSn, 0, []byte(cleanNode.ToCouchDBString()))
 				logger.Info("【", cleanSn, "】为手动模式，不能自动开启净化器")
 			}
 
